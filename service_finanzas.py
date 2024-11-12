@@ -11,9 +11,9 @@ app = Flask(__name__)
 # Configuración de la base de datos MySQL
 DATABASE_CONFIG = {
     'host': 'junction.proxy.rlwy.net',
-    'port': '56890',
+    'port': '31484',
     'user': 'root',
-    'password': 'YVkpRHBkZevbOTGWXyeGmdLInPVEGJit',
+    'password': 'yppLxPvASLlyHUcvSDGGVIEnZHHkkGtR',
     'database': 'railway'
 }
 
