@@ -17,7 +17,6 @@ DATABASE_CONFIG = {
     'database': 'railway'
 }
 
-
 # Función para conectar a la base de datos
 def get_db_connection():
     try:
@@ -26,10 +25,8 @@ def get_db_connection():
     except Error as e:
         print(f"Error al conectar a la base de datos: {e}")
         return None
-    
 
-
-# Función para crear la tabla usuarios si no existe
+# Función para crear las tablas si no existen
 def init_db():
     conn = get_db_connection()
     if conn:
@@ -44,6 +41,34 @@ def init_db():
                 correo VARCHAR(100) UNIQUE
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS boletas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                boleta_id VARCHAR(255),
+                banco_id VARCHAR(255),
+                nombre VARCHAR(255),
+                dni VARCHAR(20),
+                empresa VARCHAR(255),
+                ruc VARCHAR(20),
+                fecha_emision DATE,
+                fecha_vencimiento DATE,
+                importe FLOAT,
+                tea_compensatoria FLOAT,
+                dias_calculados INT,
+                te_compensatoria FLOAT,
+                tasa_descuento FLOAT,
+                valor_neto FLOAT,
+                comision_estudios FLOAT,
+                comision_activacion FLOAT,
+                seguro_desgravamen FLOAT,
+                costos_adicionales FLOAT,
+                valor_recibido FLOAT,
+                tcea FLOAT,
+                tef_cartera FLOAT,
+                tea_cartera FLOAT,
+                moneda VARCHAR(10) NOT NULL
+            )
+        ''')
         conn.commit()
         cursor.close()
         conn.close()
@@ -56,7 +81,7 @@ init_db()
 def registrarte():
     data = request.json
     usuario = data.get('usuario')
-    contraseña = generate_password_hash(data.get('contraseña'))  # Encriptar la contraseña
+    contraseña = generate_password_hash(data.get('contraseña'))
     nombres = data.get('nombres')
     apellidos = data.get('apellidos')
     correo = data.get('correo')
@@ -101,51 +126,12 @@ def iniciar_sesion():
             return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
     else:
         return jsonify({"error": "Error de conexión con la base de datos"}), 500
-    
-
-# Función para inicializar la base de datos (solo si no existe la tabla)
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS boletas (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            boleta_id VARCHAR(255),
-            banco_id VARCHAR(255),
-            nombre VARCHAR(255),
-            dni VARCHAR(20),
-            empresa VARCHAR(255),
-            ruc VARCHAR(20),
-            fecha_emision DATE,
-            fecha_vencimiento DATE,
-            importe FLOAT,
-            tea_compensatoria FLOAT,
-            dias_calculados INT,
-            te_compensatoria FLOAT,
-            tasa_descuento FLOAT,
-            valor_neto FLOAT,
-            comision_estudios FLOAT,
-            comision_activacion FLOAT,
-            seguro_desgravamen FLOAT,
-            costos_adicionales FLOAT,
-            valor_recibido FLOAT,
-            tcea FLOAT,
-            tef_cartera FLOAT,
-            tea_cartera FLOAT
-        )
-    ''')
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-# Inicializar la base de datos
-init_db()
 
 # Función para convertir fecha de DD/MM/YYYY a YYYY-MM-DD
 def convertir_fecha(fecha):
     return datetime.strptime(fecha, "%d/%m/%Y").strftime("%Y-%m-%d")
 
-# Funciones para cálculos
+# Funciones para cálculos financieros
 def generar_tea(banco_id):
     if banco_id == "BCP":
         return round(random.uniform(15, 25), 2) / 100
@@ -221,7 +207,7 @@ def calcular_tcea_cartera(boletas):
             tcea_cartera += cok
 
     return round(tcea_cartera * 100, 6), cok_values
- 
+
 # Endpoint para procesar múltiples boletas
 @app.route('/procesar_boletas', methods=['POST'])
 def procesar_boletas():
@@ -232,6 +218,10 @@ def procesar_boletas():
         return jsonify({"error": "Datos incompletos"}), 400
 
     for boleta_data in data["boletas"]:
+        moneda = boleta_data.get("moneda")
+        if moneda not in ["soles", "dolares"]:
+            return jsonify({"error": "Moneda inválida, debe ser 'soles' o 'dolares'"}), 400
+
         tea_compensatoria = generar_tea(boleta_data["banco_id"])
         if tea_compensatoria is None:
             continue
@@ -252,14 +242,14 @@ def procesar_boletas():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera, moneda)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
             boleta_id, boleta_data["banco_id"], boleta_data["nombre"], boleta_data["dni"],
             boleta_data["empresa"], boleta_data["ruc"], fecha_emision, fecha_vencimiento,
             boleta_data["importe"], tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto,
             comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales,
-            valor_recibido, tcea, tef_cartera, tea_cartera
+            valor_recibido, tcea, tef_cartera, tea_cartera, moneda
         ))
         conn.commit()
         cursor.close()
@@ -268,6 +258,7 @@ def procesar_boletas():
         resultados.append({
             "Boleta ID": boleta_id,
             "Banco ID": boleta_data["banco_id"],
+            "Moneda": moneda,
             "TEA (Tasa Efectiva Anual Compensatoria)": round(tea_compensatoria * 100, 2),
             "Dias Calculados": dias_calculados,
             "TE (Tasa Efectiva Compensatoria)": round(te_compensatoria * 100, 6),
