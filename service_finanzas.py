@@ -1,10 +1,13 @@
 from flask import Flask, request, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
 import random
 import uuid
 import mysql.connector
 from datetime import datetime
 from mysql.connector import Error
+
 app = Flask(__name__)
+
 
 # Configuración de la base de datos MySQL
 DATABASE_CONFIG = {
@@ -97,6 +100,57 @@ def init_db():
 
 # Inicializar la base de datos
 init_db()
+
+# Ruta para registrar un usuario
+@app.route('/registrarte', methods=['POST'])
+def registrarte():
+    data = request.json
+    usuario = data.get('usuario')
+    contraseña = generate_password_hash(data.get('contraseña'))  # Encriptar la contraseña
+    nombres = data.get('nombres')
+    apellidos = data.get('apellidos')
+    correo = data.get('correo')
+
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO usuarios (usuario, contraseña, nombres, apellidos, correo)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (usuario, contraseña, nombres, apellidos, correo))
+            conn.commit()
+            return jsonify({"mensaje": "Usuario registrado exitosamente"}), 201
+        except mysql.connector.IntegrityError:
+            conn.rollback()
+            return jsonify({"error": "El usuario o correo ya existe"}), 400
+        finally:
+            cursor.close()
+            conn.close()
+    else:
+        return jsonify({"error": "Error de conexión con la base de datos"}), 500
+
+# Ruta para iniciar sesión
+@app.route('/iniciar_sesion', methods=['POST'])
+def iniciar_sesion():
+    data = request.json
+    usuario = data.get('usuario')
+    contraseña = data.get('contraseña')
+
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('SELECT * FROM usuarios WHERE usuario = %s', (usuario,))
+        user = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if user and check_password_hash(user['contraseña'], contraseña):
+            return jsonify({"mensaje": "Inicio de sesión exitoso"}), 200
+        else:
+            return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+    else:
+        return jsonify({"error": "Error de conexión con la base de datos"}), 500
 
 # Función para convertir fecha de DD/MM/YYYY a YYYY-MM-DD
 def convertir_fecha(fecha):
@@ -405,3 +459,4 @@ def consolidado_boletas():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
