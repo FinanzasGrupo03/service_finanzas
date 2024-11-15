@@ -49,6 +49,25 @@ def init_db():
             )
         ''')
 
+        cursor.execute("SHOW COLUMNS FROM boletas LIKE 'dias_tasa'")
+        dias_tasa_exists = cursor.fetchone() is not None
+
+        cursor.execute("SHOW COLUMNS FROM boletas LIKE 'tipo_tasa'")
+        tipo_tasa_exists = cursor.fetchone() is not None
+
+        cursor.execute("SHOW COLUMNS FROM boletas LIKE 'dias_capitalizacion'")
+        dias_capitalizacion_exists = cursor.fetchone() is not None
+
+        # Agregar columnas solo si no existen
+        if not dias_tasa_exists:
+            cursor.execute("ALTER TABLE boletas ADD COLUMN dias_tasa INT")
+
+        if not tipo_tasa_exists:
+            cursor.execute("ALTER TABLE boletas ADD COLUMN tipo_tasa VARCHAR(10)")
+
+        if not dias_capitalizacion_exists:
+            cursor.execute("ALTER TABLE boletas ADD COLUMN dias_capitalizacion INT")
+
         # Crear tabla boletas si no existe
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS boletas (
@@ -75,7 +94,11 @@ def init_db():
                 tcea FLOAT,
                 tef_cartera FLOAT,
                 tea_cartera FLOAT,
-                tipo_moneda VARCHAR(10)
+                tipo_moneda VARCHAR(10),
+
+                dias_tasa INT,
+                tipo_tasa VARCHAR(10),
+                dias_capitalizacion INT
             )
         ''')
 
@@ -172,10 +195,15 @@ def calcular_dias(fecha_emision, fecha_vencimiento):
     fecha_vencimiento = datetime.strptime(fecha_vencimiento, "%d/%m/%Y")
     return (fecha_vencimiento - fecha_emision).days
 
-def calcular_te(tea_compensatoria, dias_calculados):
+def calcular_te(tea_compensatoria, dias_calculados, dias_tasa):
     if dias_calculados == 0:
         return 0
-    return ((1 + tea_compensatoria) ** (dias_calculados / 360) - 1)
+    return ((1 + tea_compensatoria) ** (dias_calculados / dias_tasa) - 1)
+
+def convertir_tn_a_tf(tna_compensatoria, dias_tasa, dias_calculados, capitalizacion):
+    if dias_calculados == 0:
+        return 0
+    return ((1+(tna_compensatoria/(dias_tasa/capitalizacion)))**(dias_calculados/capitalizacion) - 1)
 
 def calcular_tasa_descuento(te_compensatoria):
     return te_compensatoria / (1 + te_compensatoria)
@@ -265,13 +293,18 @@ def procesar_boletas():
         return jsonify({"error": "Datos incompletos"}), 400
 
     for boleta_data in data["boletas"]:
-        tea_compensatoria = generar_tea(boleta_data["banco_id"])
+        tea_compensatoria = boleta_data["tasa_compensatoria"]
         if tea_compensatoria is None:
             continue
 
         boleta_id = f"{boleta_data['banco_id']}_{uuid.uuid4()}"
         dias_calculados = calcular_dias(boleta_data["fecha_emision"], boleta_data["fecha_vencimiento"])
-        te_compensatoria = calcular_te(tea_compensatoria, dias_calculados)
+        capitalizacion = None
+        if boleta_data["tipo_tasa"] == "EFECTIVA":
+            te_compensatoria = calcular_te(tea_compensatoria, dias_calculados, boleta_data["dias_tasa"])
+        if boleta_data["tipo_tasa"] == "NOMINAL":
+            capitalizacion = boleta_data["capitalizacion"]
+            te_compensatoria = convertir_tn_a_tf(tea_compensatoria, boleta_data["dias_tasa"], dias_calculados, capitalizacion)
         tasa_descuento = calcular_tasa_descuento(te_compensatoria)
         valor_neto = calcular_valor_neto(boleta_data["importe"], tasa_descuento)
         comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales = calcular_costos_adicionales(boleta_data["banco_id"], boleta_data["importe"])
@@ -285,14 +318,16 @@ def procesar_boletas():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera, tipo_moneda)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios,
+            comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera, tipo_moneda, dias_tasa, tipo_tasa, dias_capitalizacion)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
             boleta_id, boleta_data["banco_id"], boleta_data["nombre"], boleta_data["dni"],
             boleta_data["empresa"], boleta_data["ruc"], fecha_emision, fecha_vencimiento,
             boleta_data["importe"], tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto,
             comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales,
-            valor_recibido, tcea, tef_cartera, tea_cartera, boleta_data["tipo_moneda"]
+            valor_recibido, tcea, tef_cartera, tea_cartera, boleta_data["tipo_moneda"],
+            boleta_data["dias_tasa"], boleta_data["tipo_tasa"], capitalizacion
         ))
         conn.commit()
         cursor.close()
@@ -301,7 +336,9 @@ def procesar_boletas():
         resultados.append({
             "Boleta ID": boleta_id,
             "Banco ID": boleta_data["banco_id"],
-            "TEA (Tasa Efectiva Anual Compensatoria)": round(tea_compensatoria * 100, 2),
+            "Tasa Compensatoria": round(tea_compensatoria * 100, 2),
+            "Tipo de tasa": boleta_data["tipo_tasa"],
+            "Dias capitalizacion": capitalizacion,
             "Dias Calculados": dias_calculados,
             "TE (Tasa Efectiva Compensatoria)": round(te_compensatoria * 100, 6),
             "Tasa de Descuento": round(tasa_descuento * 100, 6),
@@ -339,6 +376,10 @@ def asignar_boleta():
     data = request.json
     boleta_id = data.get("boleta_id")
     banco_id = data.get("banco_id")
+    tasa_compensatoria = data.get("tasa_compensatoria")
+    dias_tasa = data.get("dias_tasa")
+    tipo_tasa = data.get("tipo_tasa")
+    dias_capitalizacion = None
 
     # Validar banco_id
     if banco_id not in ["BCP", "Interbank", "BBVA"]:
@@ -356,9 +397,13 @@ def asignar_boleta():
         return jsonify({"error": "Boleta no encontrada o ya asignada"}), 404
 
     # Calcular los valores financieros
-    tea_compensatoria = generar_tea(banco_id)
+    tea_compensatoria = tasa_compensatoria
     dias_calculados = calcular_dias(boleta["fecha_emision"].strftime("%d/%m/%Y"), boleta["fecha_vencimiento"].strftime("%d/%m/%Y"))
-    te_compensatoria = calcular_te(tea_compensatoria, dias_calculados)
+    if tipo_tasa == "EFECTIVA":
+        te_compensatoria = calcular_te(tea_compensatoria, dias_calculados, dias_tasa)
+    if tipo_tasa == "NOMINAL":
+        dias_capitalizacion = data.get("dias_capitalizacion")
+        te_compensatoria = convertir_tn_a_tf(tea_compensatoria, dias_tasa, dias_calculados, dias_capitalizacion)
     tasa_descuento = calcular_tasa_descuento(te_compensatoria)
     valor_neto = calcular_valor_neto(boleta["importe"], tasa_descuento)
     comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales = calcular_costos_adicionales(banco_id, boleta["importe"])
@@ -368,14 +413,15 @@ def asignar_boleta():
 
     # Mover la boleta de boletas_libres a boletas
     cursor.execute('''
-        INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera, tipo_moneda)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO boletas (boleta_id, banco_id, nombre, dni, empresa, ruc, fecha_emision, fecha_vencimiento, importe, tea_compensatoria, dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios, comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea, tef_cartera, tea_cartera, tipo_moneda, dias_tasa, tipo_tasa,
+        dias_capitalizacion)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ''', (
         boleta["boleta_id"], banco_id, boleta["nombre"], boleta["dni"], boleta["empresa"], boleta["ruc"],
         boleta["fecha_emision"], boleta["fecha_vencimiento"], boleta["importe"], tea_compensatoria,
         dias_calculados, te_compensatoria, tasa_descuento, valor_neto, comision_estudios,
         comision_activacion, seguro_desgravamen, costos_adicionales, valor_recibido, tcea,
-        tef_cartera, tea_cartera, boleta["tipo_moneda"]
+        tef_cartera, tea_cartera, boleta["tipo_moneda"], dias_tasa, tipo_tasa, dias_capitalizacion
     ))
 
     # Eliminar de boletas_libres
