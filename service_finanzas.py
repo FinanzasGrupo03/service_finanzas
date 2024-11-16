@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import random
 import uuid
@@ -7,6 +8,7 @@ from datetime import datetime
 from mysql.connector import Error
 
 app = Flask(__name__)
+CORS(app) 
 
 
 # Configuración de la base de datos MySQL
