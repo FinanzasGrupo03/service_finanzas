@@ -5,3 +5,4 @@ gunicorn==20.1.0
 Jinja2==3.1.4
 mysql-connector-python==8.0.33
 Werkzeug==3.0.4
+Flask-Cors==4.0.0
